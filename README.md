@@ -1,9 +1,10 @@
-# CAP-Codex-Manager
+<img width="3608" height="1778" alt="image" src="https://github.com/user-attachments/assets/4a8d3e2d-9427-4471-9aa8-51e2330c6838" /># CAP-Codex-Manager
 
 一款专为 OpenAI 账号池设计的高性能管理面板，集成全自动批量注册、CLIProxyAPI 平台账号池实时监控与智能维护系统。
 本项目核心基于 [cnlimiter/codex-manager](https://github.com/cnlimiter/codex-manager) 以及 [DestinyCycloid/codex-console](https://github.com/DestinyCycloid/codex-console) 开发。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 
 ## 核心特性
 
@@ -61,6 +62,12 @@ python webui.py
 
 进入系统设置页添加 CPA 服务，即可使用。
 
+## 页面展示
+<img width="1064" height="511" alt="截屏2026-03-25 22 39 46" src="https://github.com/user-attachments/assets/4a019320-6a86-44d6-b465-c53e74f97ac1" />
+<img width="1795" height="877" alt="截屏2026-03-25 22 35 12" src="https://github.com/user-attachments/assets/ed34f98e-3b39-44f8-9ac5-19bce792ded4" />
+<img width="1791" height="881" alt="截屏2026-03-25 22 39 10" src="https://github.com/user-attachments/assets/f4388533-43a1-4d27-a626-83ecc582dfcd" />
+<img width="1801" height="887" alt="截屏2026-03-25 22 34 33" src="https://github.com/user-attachments/assets/81d998df-e109-4836-9482-95d2659948d6" />
+<img width="1792" height="877" alt="截屏2026-03-25 22 39 29" src="https://github.com/user-attachments/assets/21c7d6a6-e367-410c-a180-84cfe1ef74c6" />
 
 ## 巡检与补货配置建议
 
