@@ -268,7 +268,7 @@ async function loadOutlookServices() {
                         ${service.config?.has_oauth ? 'OAuth' : '密码'}
                     </span>
                 </td>
-                <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '✅' : '⭕'}</td>
+                <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '正常' : '禁用'}</td>
                 <td>${service.priority}</td>
                 <td>${format.date(service.last_used)}</td>
                 <td>
@@ -376,7 +376,7 @@ async function loadCustomServices() {
                 <td>${escapeHtml(service.name)}</td>
                 <td>${getCustomServiceTypeBadge(service._subType)}</td>
                 <td style="font-size: 0.75rem;">${getCustomServiceAddress(service)}</td>
-                <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '✅' : '⭕'}</td>
+                <td title="${service.enabled ? '已启用' : '已禁用'}">${service.enabled ? '正常' : '禁用'}</td>
                 <td>${service.priority}</td>
                 <td>${format.date(service.last_used)}</td>
                 <td>
@@ -439,8 +439,8 @@ async function handleOutlookImport() {
         elements.importResult.style.display = 'block';
         elements.importResult.innerHTML = `
             <div class="import-stats">
-                <span>✅ 成功导入: <strong>${result.success || 0}</strong></span>
-                <span>❌ 失败: <strong>${result.failed || 0}</strong></span>
+                <span>成功导入: <strong>${result.success || 0}</strong></span>
+                <span>导入失败: <strong>${result.failed || 0}</strong></span>
             </div>
             ${result.errors?.length ? `<div class="import-errors" style="margin-top: var(--spacing-sm);"><strong>错误详情：</strong><ul>${result.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>` : ''}
         `;

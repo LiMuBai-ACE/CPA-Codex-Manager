@@ -785,7 +785,7 @@ async def run_batch_pipeline(
             if failed_count > 0:
                 add_batch_log(f"[完成] {service_name} 批量任务完成！成功: {success_count}, 未成功: {failed_count}")
             else:
-                add_batch_log(f"[完成] {service_name} 批量任务完成！✅ 全部成功: {success_count} 个")
+                add_batch_log(f"[完成] {service_name} 批量任务完成！全部成功: {success_count} 个")
             
             add_batch_log(f"[统计] 总耗时: {time_str}, 平均速率: {avg_time:.1f}s/账号")
             update_batch_status(finished=True, status="completed")
