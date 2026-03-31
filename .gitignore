@@ -68,3 +68,5 @@ Icon?
 # Project specific
 backups/
 /out/
+config.toml
+instruction.md

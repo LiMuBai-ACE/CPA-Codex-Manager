@@ -26,10 +26,17 @@ logger = logging.getLogger(__name__)
 class EmailServiceAdapter:
     """Adapt project email services to the V2 state machine."""
 
-    def __init__(self, email_service, email_info: Optional[Dict[str, Any]], log_fn: Callable[[str], None]):
+    def __init__(
+        self,
+        email_service,
+        email_info: Optional[Dict[str, Any]],
+        log_fn: Callable[[str], None],
+        check_cancelled: Optional[Callable[[], bool]] = None,
+    ):
         self.email_service = email_service
         self.email_info = email_info or {}
         self.log_fn = log_fn
+        self.check_cancelled = check_cancelled or (lambda: False)
         self._used_codes = set()
         self._signature = inspect.signature(self.email_service.get_verification_code)
 
@@ -41,19 +48,33 @@ class EmailServiceAdapter:
         exclude_codes=None,
     ):
         self.log_fn(f"正在等待邮箱 {email} 的验证码 ({timeout}s)...")
-        kwargs = {
-            "email": email,
-            "email_id": self.email_info.get("service_id"),
-            "timeout": timeout,
-            "otp_sent_at": otp_sent_at,
-        }
-        if "exclude_codes" in self._signature.parameters:
-            kwargs["exclude_codes"] = exclude_codes or self._used_codes
-        code = self.email_service.get_verification_code(**kwargs)
-        if code:
-            self._used_codes.add(code)
-            self.log_fn(f"成功获取验证码: {code}")
-        return code
+        started = time.time()
+        remaining = max(1, int(timeout))
+
+        while remaining > 0:
+            if self.check_cancelled():
+                self.log_fn("验证码等待已取消")
+                return None
+
+            kwargs = {
+                "email": email,
+                "email_id": self.email_info.get("service_id"),
+                "timeout": min(remaining, 8),
+                "otp_sent_at": otp_sent_at,
+            }
+            if "exclude_codes" in self._signature.parameters:
+                kwargs["exclude_codes"] = exclude_codes or self._used_codes
+
+            code = self.email_service.get_verification_code(**kwargs)
+            if code:
+                self._used_codes.add(code)
+                self.log_fn(f"成功获取验证码: {code}")
+                return code
+
+            elapsed = int(time.time() - started)
+            remaining = max(0, int(timeout) - elapsed)
+
+        return None
 
 
 class RegistrationEngineV2:
@@ -67,6 +88,7 @@ class RegistrationEngineV2:
         callback_logger: Optional[Callable[[str], None]] = None,
         task_uuid: Optional[str] = None,
         status_callback: Optional[Callable[[str, Any], None]] = None,
+        check_cancelled: Optional[Callable[[], bool]] = None,
         max_retries: Optional[int] = None,
     ):
         self.email_service = email_service
@@ -75,6 +97,7 @@ class RegistrationEngineV2:
         self.callback_logger = callback_logger or (lambda msg: logger.info(msg))
         self.task_uuid = task_uuid
         self.status_callback = status_callback
+        self.check_cancelled = check_cancelled or (lambda: False)
 
         settings = get_settings()
         self.max_retries = max(1, int(max_retries or settings.registration_max_retries or 3))
@@ -84,6 +107,13 @@ class RegistrationEngineV2:
         self.password: Optional[str] = None
         self.email_info: Optional[Dict[str, Any]] = None
         self.logs: List[str] = []
+
+    def _is_cancelled(self) -> bool:
+        return bool(self.check_cancelled and self.check_cancelled())
+
+    def _raise_if_cancelled(self):
+        if self._is_cancelled():
+            raise RuntimeError("任务已取消")
 
     def _log(self, message: str, level: str = "info"):
         tags = {
@@ -218,6 +248,7 @@ class RegistrationEngineV2:
 
     def _prepare_email(self) -> bool:
         try:
+            self._raise_if_cancelled()
             self._log(f"正在准备 {self.email_service.service_type.value} 邮箱账户...")
             self.email_info = self.email_service.create_email()
             resolved_email = self.email or ((self.email_info or {}).get("email"))
@@ -239,6 +270,7 @@ class RegistrationEngineV2:
             last_error = ""
             for attempt in range(self.max_retries):
                 try:
+                    self._raise_if_cancelled()
                     if attempt == 0:
                         self._log("-" * 40)
                         self._log("注册引擎: 流程启动")
@@ -262,7 +294,13 @@ class RegistrationEngineV2:
                     birthdate = generate_random_birthday()
                     self._log(f"邮箱账户: {result.email}")
 
-                    email_adapter = EmailServiceAdapter(self.email_service, self.email_info, self._log)
+                    self._raise_if_cancelled()
+                    email_adapter = EmailServiceAdapter(
+                        self.email_service,
+                        self.email_info,
+                        self._log,
+                        check_cancelled=self.check_cancelled,
+                    )
                     client = ChatGPTClient(
                         proxy=self.proxy_url,
                         verbose=False,
@@ -278,6 +316,7 @@ class RegistrationEngineV2:
                         birthdate,
                         email_adapter,
                     )
+                    self._raise_if_cancelled()
                     if not success:
                         last_error = f"注册流失败: {msg}"
                         if attempt < self.max_retries - 1 and self._should_retry(msg):
@@ -287,8 +326,10 @@ class RegistrationEngineV2:
                         return result
 
                     self._log("[阶段 8] 正在同步账户访问令牌...")
+                    self._raise_if_cancelled()
                     session_ok, session_result = client.reuse_session_and_get_tokens()
                     if session_ok:
+                        self._raise_if_cancelled()
                         result.success = True
                         result.access_token = session_result.get("access_token", "")
                         result.session_token = session_result.get("session_token", "")
@@ -337,6 +378,10 @@ class RegistrationEngineV2:
             result.error_message = last_error or "注册失败"
             return result
         except Exception as e:
+            if str(e) == "任务已取消":
+                self._log("注册流程已收到取消信号", "warning")
+                result.error_message = "任务已取消"
+                return result
             self._log(f"V2 注册全流程执行异常: {e}", "error")
             result.error_message = str(e)
             return result

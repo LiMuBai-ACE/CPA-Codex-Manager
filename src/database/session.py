@@ -56,23 +56,32 @@ class DatabaseSessionManager:
                 "timeout": 30,  # 等待写锁最多 30 秒，避免立即报错
             }
         else:
-            pool_size = int(os.environ.get("DB_POOL_SIZE", "20"))
-            max_overflow = int(os.environ.get("DB_MAX_OVERFLOW", "40"))
-            pool_timeout = int(os.environ.get("DB_POOL_TIMEOUT", "60"))
-            pool_recycle = int(os.environ.get("DB_POOL_RECYCLE", "1800"))
+            pool_size = int(os.environ.get("DB_POOL_SIZE", "5"))
+            max_overflow = int(os.environ.get("DB_MAX_OVERFLOW", "5"))
+            pool_timeout = int(os.environ.get("DB_POOL_TIMEOUT", "30"))
+            pool_recycle = int(os.environ.get("DB_POOL_RECYCLE", "300"))
+            connect_timeout = int(os.environ.get("DB_CONNECT_TIMEOUT", "10"))
+
+            connect_args = {
+                "connect_timeout": connect_timeout,
+            }
+
             engine_kwargs.update({
                 "pool_size": pool_size,
                 "max_overflow": max_overflow,
                 "pool_timeout": pool_timeout,
                 "pool_recycle": pool_recycle,
+                "pool_use_lifo": True,
             })
 
             logger.info(
-                "初始化数据库连接池: pool_size=%s, max_overflow=%s, pool_timeout=%ss, pool_recycle=%ss",
+                "初始化数据库连接池: pool_size=%s, max_overflow=%s, pool_timeout=%ss, pool_recycle=%ss, connect_timeout=%ss, pool_use_lifo=%s",
                 pool_size,
                 max_overflow,
                 pool_timeout,
                 pool_recycle,
+                connect_timeout,
+                True,
             )
 
         self.engine = create_engine(

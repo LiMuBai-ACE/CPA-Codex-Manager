@@ -3,7 +3,7 @@ Application metadata shared across the project.
 """
 
 APP_NAME = "CPA-Codex-Manager"
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 APP_VERSION = __version__
 APP_DESCRIPTION = "CPA-Codex-Manager"
 

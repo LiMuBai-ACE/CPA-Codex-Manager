@@ -5,7 +5,6 @@
 <img src="https://github.com/user-attachments/assets/4106fb61-5359-4d05-b666-9aa3e6e7a0f3" width="200" />
 
 一款专为 OpenAI 账号池设计的高性能管理面板，集成全自动批量注册、CLIProxyAPI 平台账号池实时监控与智能维护系统。
-本项目核心基于 [cnlimiter/codex-manager](https://github.com/cnlimiter/codex-manager) 以及 [DestinyCycloid/codex-console](https://github.com/DestinyCycloid/codex-console) 开发。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)

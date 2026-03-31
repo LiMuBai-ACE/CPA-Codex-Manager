@@ -188,54 +188,64 @@ def _normalize_email_service_config(
     return normalized
 
 
+def _get_task_logs_text(task_uuid: str) -> str:
+    """把当前内存日志快照为数据库文本，供任务收尾时一次性持久化。"""
+    logs = task_manager.get_logs(task_uuid)
+    return "\n".join(logs) if logs else ""
+
+
 def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
     """
     在线程池中执行的同步注册任务
 
     这个函数会被 run_in_executor 调用，运行在独立线程中
     """
-    with get_db() as db:
-        try:
-            # 检查是否已取消
-            if task_manager.is_cancelled(task_uuid):
-                logger.info(f"任务 {task_uuid} 已取消，跳过执行")
-                return
+    try:
+        # 检查是否已取消
+        if task_manager.is_cancelled(task_uuid):
+            logger.info(f"任务 {task_uuid} 已取消，跳过执行")
+            with get_db() as db:
+                crud.update_registration_task(
+                    db,
+                    task_uuid,
+                    status="cancelled",
+                    completed_at=datetime.utcnow(),
+                    error_message="任务已取消",
+                    logs=_get_task_logs_text(task_uuid),
+                )
+            task_manager.update_status(task_uuid, "cancelled", error="任务已取消")
+            return
 
-            # 更新任务状态为运行中
+        # 更新任务状态为运行中
+        with get_db() as db:
             task = crud.update_registration_task(
                 db, task_uuid,
                 status="running",
                 started_at=datetime.utcnow()
             )
 
-            if not task:
-                logger.error(f"任务不存在: {task_uuid}")
-                return
+        if not task:
+            logger.error(f"任务不存在: {task_uuid}")
+            return
 
-            # 更新 TaskManager 状态
-            task_manager.update_status(task_uuid, "running")
+        task_manager.update_status(task_uuid, "running")
 
-            # 确定使用的代理
-            # 如果前端传入了代理参数，使用传入的
-            # 否则从代理列表或系统设置中获取
-            actual_proxy_url = proxy
-            proxy_id = None
+        actual_proxy_url = proxy
+        proxy_id = None
+        service_type = EmailServiceType(email_service_type)
+        settings = get_settings()
 
+        with get_db() as db:
             if not actual_proxy_url:
                 actual_proxy_url, proxy_id = get_proxy_for_registration(db)
                 if actual_proxy_url:
                     logger.info(f"任务 {task_uuid} 使用代理: {actual_proxy_url[:50]}...")
 
-            # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
 
-            # 创建邮箱服务
-            service_type = EmailServiceType(email_service_type)
-            settings = get_settings()
-
-            # 优先使用数据库中配置的邮箱服务
             if email_service_id:
                 from ...database.models import EmailService as EmailServiceModel
+
                 db_service = db.query(EmailServiceModel).filter(
                     EmailServiceModel.id == email_service_id,
                     EmailServiceModel.enabled == True
@@ -244,13 +254,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 if db_service:
                     service_type = EmailServiceType(db_service.service_type)
                     config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
-                    # 更新任务关联的邮箱服务
                     crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
                     logger.info(f"使用数据库邮箱服务: {db_service.name} (ID: {db_service.id}, 类型: {service_type.value})")
                 else:
                     raise ValueError(f"邮箱服务不存在或已禁用: {email_service_id}")
             else:
-                # 使用默认配置或传入的配置
                 if service_type == EmailServiceType.TEMPMAIL:
                     config = {
                         "base_url": settings.tempmail_base_url,
@@ -275,106 +283,123 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 else:
                     config = email_service_config or {}
 
-            email_service = EmailServiceFactory.create(service_type, config)
+        email_service = EmailServiceFactory.create(service_type, config)
+        log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
-            # 创建注册引擎 - 使用 TaskManager 的日志回调
-            log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
+        engine = RegistrationEngine(
+            email_service=email_service,
+            proxy_url=actual_proxy_url,
+            callback_logger=log_callback,
+            task_uuid=task_uuid,
+            status_callback=lambda st, **kw: task_manager.update_status(task_uuid, st, **kw),
+            check_cancelled=task_manager.create_check_cancelled_callback(task_uuid),
+        )
 
-            engine = RegistrationEngine(
-                email_service=email_service,
-                proxy_url=actual_proxy_url,
-                callback_logger=log_callback,
-                task_uuid=task_uuid,
-                status_callback=lambda st, **kw: task_manager.update_status(task_uuid, st, **kw)
-            )
+        result = engine.run()
 
-            # 执行注册
-            result = engine.run()
+        if task_manager.is_cancelled(task_uuid) or result.error_message == "任务已取消":
+            with get_db() as db:
+                crud.update_registration_task(
+                    db,
+                    task_uuid,
+                    status="cancelled",
+                    completed_at=datetime.utcnow(),
+                    error_message="任务已取消",
+                    logs=_get_task_logs_text(task_uuid),
+                )
+            task_manager.update_status(task_uuid, "cancelled", error="任务已取消")
+            logger.info(f"注册任务已取消: {task_uuid}")
+            return
 
-            if result.success:
-                # 更新代理使用时间
+        if result.success:
+            engine.save_to_database(result)
+            with get_db() as db:
                 update_proxy_usage(db, proxy_id)
-
-                # 保存到数据库
-                engine.save_to_database(result)
-
-                # 更新任务状态
                 crud.update_registration_task(
                     db, task_uuid,
                     status="completed",
                     completed_at=datetime.utcnow(),
-                    result=result.to_dict()
+                    result=result.to_dict(),
+                    logs=_get_task_logs_text(task_uuid),
                 )
 
-                # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "completed", email=result.email)
+            task_manager.update_status(task_uuid, "completed", email=result.email)
 
-                has_post_uploads = auto_upload_cpa or auto_upload_sub2api or auto_upload_tm
-                run_uploads_async = bool(batch_id and has_post_uploads)
+            has_post_uploads = auto_upload_cpa or auto_upload_sub2api or auto_upload_tm
+            run_uploads_async = bool(batch_id and has_post_uploads)
 
-                if run_uploads_async:
-                    log_callback("[上传] 注册已成功，后处理上传转入后台执行")
-                    threading.Thread(
-                        target=_run_post_registration_uploads,
-                        args=(
-                            task_uuid,
-                            result.email,
-                            log_prefix,
-                            batch_id,
-                            auto_upload_cpa,
-                            cpa_service_ids or [],
-                            auto_upload_sub2api,
-                            sub2api_service_ids or [],
-                            auto_upload_tm,
-                            tm_service_ids or [],
-                        ),
-                        daemon=True,
-                    ).start()
-                elif has_post_uploads:
-                    _run_post_registration_uploads(
-                        task_uuid=task_uuid,
-                        email=result.email,
-                        log_prefix=log_prefix,
-                        batch_id=batch_id,
-                        auto_upload_cpa=auto_upload_cpa,
-                        cpa_service_ids=cpa_service_ids or [],
-                        auto_upload_sub2api=auto_upload_sub2api,
-                        sub2api_service_ids=sub2api_service_ids or [],
-                        auto_upload_tm=auto_upload_tm,
-                        tm_service_ids=tm_service_ids or [],
-                    )
+            if run_uploads_async:
+                log_callback("[上传] 注册已成功，后处理上传转入后台执行")
+                threading.Thread(
+                    target=_run_post_registration_uploads,
+                    args=(
+                        task_uuid,
+                        result.email,
+                        log_prefix,
+                        batch_id,
+                        auto_upload_cpa,
+                        cpa_service_ids or [],
+                        auto_upload_sub2api,
+                        sub2api_service_ids or [],
+                        auto_upload_tm,
+                        tm_service_ids or [],
+                    ),
+                    daemon=True,
+                ).start()
+            elif has_post_uploads:
+                _run_post_registration_uploads(
+                    task_uuid=task_uuid,
+                    email=result.email,
+                    log_prefix=log_prefix,
+                    batch_id=batch_id,
+                    auto_upload_cpa=auto_upload_cpa,
+                    cpa_service_ids=cpa_service_ids or [],
+                    auto_upload_sub2api=auto_upload_sub2api,
+                    sub2api_service_ids=sub2api_service_ids or [],
+                    auto_upload_tm=auto_upload_tm,
+                    tm_service_ids=tm_service_ids or [],
+                )
 
-                logger.info(f"注册任务完成: {task_uuid}, 邮箱: {result.email}")
-            else:
-                # 更新任务状态为失败
+            logger.info(f"注册任务完成: {task_uuid}, 邮箱: {result.email}")
+        else:
+            with get_db() as db:
                 crud.update_registration_task(
                     db, task_uuid,
                     status="failed",
                     completed_at=datetime.utcnow(),
-                    error_message=result.error_message
+                    error_message=result.error_message,
+                    logs=_get_task_logs_text(task_uuid),
                 )
 
-                # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "failed", error=result.error_message)
+            task_manager.update_status(task_uuid, "failed", error=result.error_message)
+            logger.warning(f"注册任务失败: {task_uuid}, 原因: {result.error_message}")
 
-                logger.warning(f"注册任务失败: {task_uuid}, 原因: {result.error_message}")
+    except Exception as e:
+        logger.error(f"注册任务异常: {task_uuid}, 错误: {e}")
 
-        except Exception as e:
-            logger.error(f"注册任务异常: {task_uuid}, 错误: {e}")
-
-            try:
-                with get_db() as db:
+        try:
+            with get_db() as db:
+                if task_manager.is_cancelled(task_uuid):
                     crud.update_registration_task(
                         db, task_uuid,
-                        status="failed",
+                        status="cancelled",
                         completed_at=datetime.utcnow(),
-                        error_message=str(e)
+                        error_message="任务已取消",
+                        logs=_get_task_logs_text(task_uuid),
                     )
+                    task_manager.update_status(task_uuid, "cancelled", error="任务已取消")
+                    return
+                crud.update_registration_task(
+                    db, task_uuid,
+                    status="failed",
+                    completed_at=datetime.utcnow(),
+                    error_message=str(e),
+                    logs=_get_task_logs_text(task_uuid),
+                )
 
-                # 更新 TaskManager 状态
-                task_manager.update_status(task_uuid, "failed", error=str(e))
-            except:
-                pass
+            task_manager.update_status(task_uuid, "failed", error=str(e))
+        except Exception:
+            pass
 
 
 async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
@@ -1141,6 +1166,8 @@ async def cancel_batch(batch_id: str):
 
     batch["cancelled"] = True
     task_manager.cancel_batch(batch_id)
+    for task_uuid in batch.get("task_uuids", []):
+        task_manager.cancel_task(task_uuid)
     return {"success": True, "message": "批量任务取消请求已提交，正在让它们有序收工"}
 
 
@@ -1185,11 +1212,22 @@ async def get_task_logs(task_uuid: str):
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
 
-        logs = task.logs or ""
+        live_logs = task_manager.get_logs(task_uuid)
+        db_logs = (task.logs or "").split("\n") if task.logs else []
+        status_meta = task_manager.get_status(task_uuid) or {}
+        result = task.result or {}
+        email_service = None
+        if task.email_service:
+            email_service = task.email_service.service_type
+        elif isinstance(result.get("metadata"), dict):
+            email_service = result["metadata"].get("email_service")
+
         return {
             "task_uuid": task_uuid,
-            "status": task.status,
-            "logs": logs.split("\n") if logs else []
+            "status": status_meta.get("status") or task.status,
+            "email": status_meta.get("email") or result.get("email"),
+            "email_service": email_service,
+            "logs": live_logs or db_logs,
         }
 
 
@@ -1204,7 +1242,9 @@ async def cancel_task(task_uuid: str):
         if task.status not in ["pending", "running"]:
             raise HTTPException(status_code=400, detail="任务已完成或已取消")
 
-        task = crud.update_registration_task(db, task_uuid, status="cancelled")
+        task_manager.cancel_task(task_uuid)
+        task_manager.update_status(task_uuid, "cancelling")
+        crud.update_registration_task(db, task_uuid, status="cancelled", error_message="任务已取消")
 
         return {"success": True, "message": "任务已取消"}
 
