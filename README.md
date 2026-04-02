@@ -74,6 +74,37 @@ python webui.py
 
 进入系统设置页添加 CPA 服务，即可使用。
 
+如果你在 Windows 上遇到依赖导入异常，优先显式使用项目虚拟环境启动：
+
+```powershell
+.\.venv\Scripts\python.exe webui.py
+```
+
+### 4. 使用 Codex-Manager 同步侧车启动
+
+如果你希望在启动 `CPA-Codex-Manager` 的同时，把本地账号自动同步到本机 `Codex-Manager`，可以使用：
+
+```powershell
+python scripts/run_cpa_codex_manager_with_codex_manager_sync.py
+```
+
+脚本会优先自动切换到项目自己的 `.venv` Python 再继续执行，因此通常不需要手动写完整解释器路径。
+
+这个脚本会：
+- 启动 `webui.py`
+- 轮询本地 `accounts` 表
+- 将可用账号通过 `chatgptAuthTokens` 方式同步到本机 `Codex-Manager`
+- 同步完成后恢复 `Codex-Manager` 原本的当前认证账号和手动优选账号
+
+可用环境变量：
+- `CPA_CODEX_MANAGER_PORT`：覆盖默认 Web 端口，默认 `8000`
+- `CPA_CODEX_MANAGER_START_WEBUI`：设为 `false` 时只运行同步侧车，不启动 Web UI
+- `CODEX_MANAGER_SYNC_ENABLED`：设为 `false` 时禁用同步逻辑
+- `CODEX_MANAGER_RPC_URL`：指定 `Codex-Manager` RPC 地址，默认 `http://127.0.0.1:48760/rpc`
+- `CODEX_MANAGER_RPC_TOKEN`：直接指定 RPC Token
+- `CODEX_MANAGER_RPC_TOKEN_FILE`：指定 RPC Token 文件路径
+- `CODEX_MANAGER_DATA_DIR`：指定 `Codex-Manager` 数据目录，用于自动定位 `codexmanager.db` 和 `codexmanager.rpc-token`
+
 ### Docker 运行
 
 先准备目录：

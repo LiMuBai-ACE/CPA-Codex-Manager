@@ -16,12 +16,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from ..app_meta import APP_NAME, APP_VERSION, display_name
 from ..config.settings import get_settings
-from .routes import api_router
+from .routes import (
+    api_router,
+    auto_patrol_manager,
+    cliproxy_available,
+    cliproxy_import_error,
+)
 from .routes.websocket import router as ws_router
-from .routes.cliproxy import auto_patrol_manager
 from .task_manager import task_manager
 
 logger = logging.getLogger(__name__)
@@ -174,6 +179,18 @@ def create_app() -> FastAPI:
         """Cliproxy 账号清理页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
+        if not cliproxy_available:
+            missing_dependency = getattr(cliproxy_import_error, "name", "aiohttp")
+            return HTMLResponse(
+                content=(
+                    "<html><body style=\"font-family: sans-serif; padding: 2rem;\">"
+                    "<h1>Cliproxy feature unavailable</h1>"
+                    f"<p>Missing Python dependency: <code>{missing_dependency}</code>.</p>"
+                    "<p>Install project dependencies in the current interpreter, then restart the Web UI.</p>"
+                    "</body></html>"
+                ),
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return templates.TemplateResponse(request=request, name="cliproxy.html", context={"request": request})
 
     @app.get("/payment", response_class=HTMLResponse)
@@ -198,7 +215,13 @@ def create_app() -> FastAPI:
         task_manager.set_loop(loop)
 
         # 事件循环就绪后，再决定是否延迟启动自动巡检
-        asyncio.ensure_future(auto_patrol_manager._delayed_start_if_needed())
+        if cliproxy_available:
+            asyncio.ensure_future(auto_patrol_manager._delayed_start_if_needed())
+        elif cliproxy_import_error is not None:
+            logger.warning(
+                "Skipping cliproxy startup hooks because dependency '%s' is missing",
+                cliproxy_import_error.name,
+            )
 
         logger.info("=" * 50)
         logger.info(f"{APP_NAME} v{APP_VERSION} 启动中")
@@ -209,7 +232,8 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """应用关闭事件"""
-        auto_patrol_manager.stop()
+        if cliproxy_available:
+            auto_patrol_manager.stop()
         logger.info("应用关闭，今天先收摊啦")
 
     return app
